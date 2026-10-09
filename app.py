@@ -59,6 +59,11 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️  Settings")
 
+    api_key_input = st.text_input("Gemini API Key", type="password", help="Required for Netlify deployment")
+    if api_key_input:
+        import os
+        os.environ["GEMINI_API_KEY"] = api_key_input
+
     auto_approve = st.toggle(
         "Auto-approve risky tools",
         value=False,
