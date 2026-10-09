@@ -1,15 +1,6 @@
 """
 app.py — Streamlit web UI for the AI agent.
 Run with:  streamlit run app.py
-
-Strategy
---------
-* agent.py is NEVER modified — we simply import run_agent() from it.
-* stdout is redirected via a ThreadLocalStdout so every print() from the agent
-  (iterations, tool calls, results) is captured safely per-thread.
-* The main thread drains the queue in a tight loop and updates Streamlit
-  placeholders live — no page reload needed.
-* safety.py's require_approval() is monkey-patched with a thread-aware wrapper.
 """
 
 import sys
@@ -21,37 +12,20 @@ from pathlib import Path
 import streamlit as st
 from agent import run_agent  # imported once at the top
 
-# ── Thread-local safety & stdout ──────────────────────────────────────────────
-class ThreadLocalStdout:
-    def __init__(self, fallback):
-        self.fallback = fallback
-        self.local = threading.local()
-
-    def write(self, s):
-        if hasattr(self.local, 'stream'):
-            self.local.stream.write(s)
-        else:
-            self.fallback.write(s)
-
-    def flush(self):
-        if hasattr(self.local, 'stream'):
-            self.local.stream.flush()
-        else:
-            self.fallback.flush()
-
-if not isinstance(sys.stdout, ThreadLocalStdout):
-    sys.stdout = ThreadLocalStdout(sys.stdout)
-
+# ── Monkey-patch require_approval ─────────────────────────────────────────────
+# We patch require_approval globally but ensure it acts based on a thread-local flag.
+# This prevents it from prompting in the terminal when run via Streamlit.
 import safety as _safety
 _orig_approve = _safety.require_approval
 
+_tls = threading.local()
+
 def _thread_aware_approve(tool_name: str, tool_input: dict) -> bool:
-    local = sys.stdout.local
-    if hasattr(local, 'web_auto_approve'):
-        if local.web_auto_approve:
-            print(f"[AUTO-APPROVED] {tool_name}")
+    if getattr(_tls, 'web_auto_approve', None) is not None:
+        if _tls.web_auto_approve:
+            _tls.print_fn(f"[AUTO-APPROVED] {tool_name}")
             return True
-        print(f"[AUTO-DENIED]   {tool_name}  (enable 'Auto-approve' in sidebar to allow)")
+        _tls.print_fn(f"[AUTO-DENIED]   {tool_name}  (enable 'Auto-approve' in sidebar to allow)")
         return False
     return _orig_approve(tool_name, tool_input)
 
@@ -65,7 +39,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS (minimal — keeps things readable) ──────────────────────────────
+# ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   .step-card   { background:#1e1e2e; border-radius:8px; padding:10px 14px;
@@ -118,7 +92,7 @@ with st.sidebar:
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.title("🤖 AI Agent")
-st.caption("Powered by **Claude** via the Anthropic SDK")
+st.caption("Powered by **Gemini** via the official SDK")
 
 goal = st.text_area(
     "Goal",
@@ -144,11 +118,10 @@ def _card(css_class: str, icon: str, text: str) -> str:
     return f'<div class="step-card {css_class}">{safe_icon} {safe_text}</div>'
 
 def _render_line(line: str) -> str | None:
-    """Convert one agent output line into an HTML card. Returns None to skip."""
     l = line.strip()
     if not l or set(l) == {"─"}:
         return None
-    if "Iteration" in l and "calling Claude" in l:
+    if "Iteration" in l and "calling Gemini" in l:
         return _card("iter-header", "🔄", l)
     if l.startswith("[tool_use]"):
         return _card("tool-call", "🔧", l.removeprefix("[tool_use]").strip())
@@ -168,7 +141,6 @@ def _render_line(line: str) -> str | None:
         return _card("info-line", "ℹ️", l)
     if l.startswith("[FINAL ANSWER]"):
         return None  # handled separately
-    # Generic text (planning sentences, etc.)
     return _card("info-line", "💬", l)
 
 # ── Agent runner ──────────────────────────────────────────────────────────────
@@ -177,31 +149,24 @@ if run_btn and goal.strip():
     output_q: queue.Queue[str | None] = queue.Queue()
     done_event = threading.Event()
 
-    # ── stdout redirector ─────────────────────────────────────────────────────
-    class _Capture:
-        def __init__(self):
-            self._buf = ""
-        def write(self, text: str):
-            self._buf += text
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
-                output_q.put(line)
-        def flush(self):
-            pass
+    # Create a custom print_fn that splits lines and queues them
+    def _app_print_fn(*args, **kwargs):
+        text = " ".join(str(a) for a in args)
+        for line in text.splitlines():
+            output_q.put(line)
 
-    # ── Thread target ─────────────────────────────────────────────────────────
     def _thread_target(is_auto_approve: bool):
-        sys.stdout.local.stream = _Capture()
-        sys.stdout.local.web_auto_approve = is_auto_approve
+        _tls.web_auto_approve = is_auto_approve
+        _tls.print_fn = _app_print_fn
         try:
-            run_agent(goal)
+            run_agent(goal, print_fn=_app_print_fn)
         except Exception as exc:
             output_q.put(f"[ERROR] Unhandled exception: {exc}")
         finally:
-            if hasattr(sys.stdout.local, 'stream'):
-                del sys.stdout.local.stream
-            if hasattr(sys.stdout.local, 'web_auto_approve'):
-                del sys.stdout.local.web_auto_approve
+            if hasattr(_tls, 'web_auto_approve'):
+                del _tls.web_auto_approve
+            if hasattr(_tls, 'print_fn'):
+                del _tls.print_fn
             done_event.set()
 
     t = threading.Thread(target=_thread_target, args=(auto_approve,), daemon=True)
@@ -224,14 +189,12 @@ if run_btn and goal.strip():
     final_lines: list[str] = []
     in_final = False
 
-    # Drain queue until agent is done and queue is empty
     while not done_event.is_set() or not output_q.empty():
         try:
             line = output_q.get(timeout=0.1)
         except queue.Empty:
             continue
 
-        # Track final-answer block
         if "[FINAL ANSWER]" in line:
             in_final = True
             continue
@@ -245,17 +208,12 @@ if run_btn and goal.strip():
             html_cards.append(card)
             log_ph.markdown("\n".join(html_cards), unsafe_allow_html=True)
 
-    # ── Post-run ──────────────────────────────────────────────────────────────
     if not final_lines:
-        stopped = next(
-            (c for c in html_cards if "⛔" in c or "⚠️" in c),
-            None,
-        )
+        stopped = next((c for c in html_cards if "⛔" in c or "⚠️" in c), None)
         if stopped:
             ans_ph.warning("Agent stopped before producing a final answer. See log.")
         else:
             ans_ph.warning("No final answer received.")
 
     st.toast("Agent finished!", icon="✅")
-    # Refresh sidebar memory panel
     st.rerun()

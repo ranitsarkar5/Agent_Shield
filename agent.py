@@ -23,7 +23,7 @@ from safety import (                               # ← all guardrails live her
 load_dotenv()  # reads GEMINI_API_KEY from .env
 
 # ── Agent loop ────────────────────────────────────────────────────────────────
-def run_agent(goal: str):
+def run_agent(goal: str, print_fn=print):
     client = genai.Client()
 
     # ── Safety state (all guardrails) ────────────────────────────────────────────
@@ -47,9 +47,9 @@ def run_agent(goal: str):
         current_message = goal
 
         for iteration in range(1, MAX_ITERATIONS + 1):
-            print(f"\n{'─'*50}")
-            print(f"  Iteration {iteration}/{MAX_ITERATIONS}  →  calling Gemini…")
-            print(f"{'─'*50}")
+            print_fn(f"\n{'─'*50}")
+            print_fn(f"  Iteration {iteration}/{MAX_ITERATIONS}  →  calling Gemini…")
+            print_fn(f"{'─'*50}")
             logger.log("iteration_start", n=iteration)
 
             # ── Call the model ────────────────────────────────────────────────────
@@ -65,17 +65,17 @@ def run_agent(goal: str):
             total_tokens = used if used > 0 else total_tokens + 100
             
             logger.log("model_response", tokens_this_call=used, total_tokens=total_tokens)
-            print(f"[tokens]       total={total_tokens}/{MAX_TOTAL_TOKENS}")
+            print_fn(f"[tokens]       total={total_tokens}/{MAX_TOTAL_TOKENS}")
 
             if total_tokens >= MAX_TOTAL_TOKENS:
-                print(f"\n[STOPPED] Token cap ({MAX_TOTAL_TOKENS}) reached.")
+                print_fn(f"\n[STOPPED] Token cap ({MAX_TOTAL_TOKENS}) reached.")
                 logger.log("stopped", reason="token_cap", total_tokens=total_tokens)
                 return
 
             # ── Case 1: model is done, return plain text ──────────────────────────
             if not response.function_calls:
                 final = response.text or ""
-                print(f"\n[FINAL ANSWER]\n{final}")
+                print_fn(f"\n[FINAL ANSWER]\n{final}")
                 logger.log("final_answer", text=final)
                 return
 
@@ -86,11 +86,11 @@ def run_agent(goal: str):
                 # Gemini returns args as a structure that dict() can cast, or it's already a dict
                 block_input = dict(call.args) if call.args else {}
 
-                print(f"[tool_use]     {block_name}({json.dumps(block_input)})")
+                print_fn(f"[tool_use]     {block_name}({json.dumps(block_input)})")
 
                 # ── 4. Loop detection ───────────────────────────────────────────────
                 if loop_det.record(block_name, block_input):
-                    print(f"[STOPPED] Loop detected: '{block_name}' repeated 3+ times.")
+                    print_fn(f"[STOPPED] Loop detected: '{block_name}' repeated 3+ times.")
                     logger.log("stopped", reason="loop_detected", tool=block_name)
                     return
 
@@ -123,7 +123,7 @@ def run_agent(goal: str):
                     is_error = True
 
                 status = "[ERROR]" if is_error else "[tool_result]"
-                print(f"{status}  {result}")
+                print_fn(f"{status}  {result}")
                 logger.log("tool_result", tool=block_name, is_error=is_error,
                            result=str(result)[:300])
 
@@ -136,7 +136,7 @@ def run_agent(goal: str):
             # Provide the results to Gemini on the next loop
             current_message = tool_results
 
-        print(f"\n[STOPPED] Reached {MAX_ITERATIONS} iterations without a final answer.")
+        print_fn(f"\n[STOPPED] Reached {MAX_ITERATIONS} iterations without a final answer.")
         logger.log("stopped", reason="max_iterations")
 
     finally:
@@ -145,7 +145,7 @@ def run_agent(goal: str):
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print('Usage: python agent.py "your goal here"')
+        print_fn('Usage: python agent.py "your goal here"')
         sys.exit(1)
 
     run_agent(goal=" ".join(sys.argv[1:]))
