@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background-color: #0e1117; color: #fafafa; display: flex; }
+        .sidebar { width: 300px; padding: 20px; background-color: #262730; border-radius: 8px; margin-right: 20px; }
+        .main { flex: 1; }
+        input[type="password"], input[type="text"] { width: 100%; padding: 10px; margin-top: 5px; margin-bottom: 15px; border-radius: 5px; border: 1px solid #444; background: #0e1117; color: white; }
+        button { background-color: #ff4b4b; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        .card { background-color: #262730; padding: 15px; border-radius: 8px; margin-top: 15px; }
+        pre { white-space: pre-wrap; font-size: 13px; color: #a6e3a1; }
+        h1, h2, h3 { margin-top: 0; }
+        .answer { color: #89dceb; font-size: 1.1em; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>⚙️ Settings</h2>
+        <label>Gemini API Key</label>
+        <input type="password" id="apiKey" placeholder="Paste your API key here">
+    </div>
+    
+    <div class="main">
+        <h1>🤖 AI Agent</h1>
+        <p style="color: #bbb;">Powered by Vercel Serverless Functions</p>
+        
+        <label>Goal</label>
+        <input type="text" id="goalInput" placeholder="e.g. Search the web for Anthropic...">
+        <button id="runBtn">▶ Run Agent</button>
+        
+        <div class="card" id="resultCard" style="display: none;">
+            <h3>💡 Final Answer</h3>
+            <div class="answer" id="answerBox"></div>
+        </div>
+        
+        <div class="card" id="logCard" style="display: none;">
+            <h3>📋 Logs</h3>
+            <pre id="logBox"></pre>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('runBtn').addEventListener('click', async () => {
+            const apiKey = document.getElementById('apiKey').value;
+            const goal = document.getElementById('goalInput').value;
+            const btn = document.getElementById('runBtn');
+            const answerBox = document.getElementById('answerBox');
+            const logBox = document.getElementById('logBox');
+            
+            if (!apiKey || !goal) {
+                alert("Please enter an API Key and a Goal.");
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.innerText = "⏳ Running...";
+            document.getElementById('resultCard').style.display = 'block';
+            document.getElementById('logCard').style.display = 'block';
+            answerBox.innerText = "Thinking...";
+            logBox.innerText = "Waiting for server response... (Note: Vercel has a 10s timeout on free tier)";
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ goal, api_key: apiKey })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    answerBox.innerText = data.answer;
+                    logBox.innerText = data.logs.join('\n');
+                } else {
+                    answerBox.innerText = "Error occurred.";
+                    logBox.innerText = data.error + "\n\n" + (data.logs || []).join('\n');
+                }
+            } catch (err) {
+                answerBox.innerText = "Failed to connect to Vercel API.";
+                logBox.innerText = err.toString();
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "▶ Run Agent";
+            }
+        });
+    </script>
+</body>
+</html>
