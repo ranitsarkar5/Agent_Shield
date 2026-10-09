@@ -145,7 +145,7 @@ def run_agent(goal: str, print_fn=print):
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print_fn('Usage: python agent.py "your goal here"')
+        print('Usage: python agent.py "your goal here"')
         sys.exit(1)
 
     run_agent(goal=" ".join(sys.argv[1:]))
